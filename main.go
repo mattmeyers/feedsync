@@ -40,6 +40,11 @@ func main() {
 		lastLink := feed.LastLink
 
 		for j, entry := range f.Items {
+			if lastLink == "" {
+				lastLink = entry.Link
+				break
+			}
+
 			if entry.Link == feed.LastLink {
 				break
 			}
