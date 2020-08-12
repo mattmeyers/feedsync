@@ -3,18 +3,19 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/mmcdole/gofeed"
+	"github.com/urfave/cli/v2"
 )
 
-type app struct {
+type handler struct {
 	conf   config
 	client *http.Client
 }
@@ -25,33 +26,149 @@ func main() {
 		log.Fatal(err)
 	}
 
-	a := &app{
+	h := handler{
 		conf:   conf,
 		client: &http.Client{Timeout: 10 * time.Second},
 	}
 
-	for i, feed := range conf.Feeds {
+	app := &cli.App{
+		Name:  "rss2pocket",
+		Usage: "synchronize RSS/Atom feeds to your Pocket",
+		Commands: []*cli.Command{
+			{
+				Name:   "list",
+				Usage:  "list all subscriptions",
+				Action: h.handleList,
+			},
+			{
+				Name:   "add",
+				Usage:  "begin synchronizing a new feed",
+				Action: h.handleAdd,
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:  "sync",
+						Usage: "run the sync operation after adding the new feed",
+					},
+				},
+			},
+			{
+				Name:   "remove",
+				Usage:  "stop synchronizing a feed",
+				Action: h.handleRemove,
+			},
+			{
+				Name:   "sync",
+				Usage:  "run the sync process",
+				Action: h.handleSync,
+			},
+			{
+				Name:   "authenticate",
+				Usage:  "retrieve an access token",
+				Action: h.handleAuthenticate,
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:  "overwrite",
+						Usage: "overwrite the existing access token",
+					},
+					&cli.StringFlag{
+						Name:  "consumer-key",
+						Usage: "Pocket app's consumer key",
+					},
+				},
+			},
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (h *handler) handleList(c *cli.Context) error {
+	for i, item := range h.conf.Feeds {
+		fmt.Printf("[%d] %s\n", i+1, item.Link)
+	}
+
+	return nil
+}
+
+func (h *handler) handleAdd(c *cli.Context) error {
+	l := c.Args().First()
+	if l == "" {
+		return errors.New("link required")
+	}
+
+	for _, item := range h.conf.Feeds {
+		if item.Link == l {
+			return errors.New("already subscribed")
+		}
+	}
+
+	h.conf.Feeds = append(h.conf.Feeds, feedEntry{Link: l})
+
+	if c.Bool("sync") {
+		err := h.handleSync(c)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := saveConfig(h.conf)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (h *handler) handleRemove(c *cli.Context) error {
+	if !c.Args().Present() {
+		return errors.New("index required")
+	}
+
+	i, err := strconv.Atoi(c.Args().First())
+	if err != nil {
+		return errors.New("invalid index")
+	}
+
+	i--
+	if i < 0 || i > len(h.conf.Feeds)-1 {
+		return errors.New("invalid index")
+	}
+
+	h.conf.Feeds = append(h.conf.Feeds[:i], h.conf.Feeds[i+1:]...)
+
+	_, err = saveConfig(h.conf)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (h *handler) handleSync(c *cli.Context) error {
+	for i, feed := range h.conf.Feeds {
 		fp := gofeed.NewParser()
 		f, err := fp.ParseURL(feed.Link)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		lastLink := feed.LastLink
 
 		for j, entry := range f.Items {
-			if lastLink == "" {
-				lastLink = entry.Link
-				break
-			}
-
 			if entry.Link == feed.LastLink {
 				break
 			}
 
-			err := a.addArticle(entry.Link)
+			err := h.addArticle(entry.Link)
 			if err != nil {
-				log.Fatal(err)
+				return err
+			}
+
+			if lastLink == "" {
+				lastLink = entry.Link
+				break
 			}
 
 			if j == 0 {
@@ -59,76 +176,26 @@ func main() {
 			}
 		}
 
-		conf.Feeds[i].LastLink = lastLink
+		h.conf.Feeds[i].LastLink = lastLink
 	}
 
-	_, err = saveConfig(conf)
+	_, err := saveConfig(h.conf)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+
+	return nil
 }
 
-type config struct {
-	ConsumerKey string      `json:"consumer_key"`
-	AccessToken string      `json:"access_token"`
-	Username    string      `json:"username"`
-	Feeds       []feedEntry `json:"feeds"`
-}
-
-type feedEntry struct {
-	Link     string `json:"link"`
-	LastLink string `json:"last_link"`
-}
-
-func openConfig() (conf config, err error) {
-	cDir, err := os.UserConfigDir()
-	if err != nil {
-		return conf, err
-	}
-
-	buf, err := ioutil.ReadFile(cDir + "/rss2pocket/config.json")
-	if err != nil {
-		return conf, err
-	}
-
-	err = json.Unmarshal(buf, &conf)
-	if err != nil {
-		return config{}, err
-	}
-
-	return conf, err
-}
-
-func saveConfig(c config) (string, error) {
-	cDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-
-	filename := cDir + "/rss2pocket/config.json"
-
-	buf, err := json.Marshal(c)
-	if err != nil {
-		return "", err
-	}
-
-	err = ioutil.WriteFile(filename, buf, 0644)
-	if err != nil {
-		return "", err
-	}
-
-	return filename, nil
-}
-
-func (a *app) addArticle(url string) error {
+func (h *handler) addArticle(url string) error {
 	body, err := json.Marshal(struct {
 		URL         string `json:"url"`
 		ConsumerKey string `json:"consumer_key"`
 		AccessToken string `json:"access_token"`
 	}{
 		URL:         url,
-		ConsumerKey: a.conf.ConsumerKey,
-		AccessToken: a.conf.AccessToken,
+		ConsumerKey: h.conf.ConsumerKey,
+		AccessToken: h.conf.AccessToken,
 	})
 	if err != nil {
 		return err
@@ -142,7 +209,7 @@ func (a *app) addArticle(url string) error {
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	req.Header.Set("X-Accept", "application/json")
 
-	_, err = a.client.Do(req)
+	_, err = h.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -150,130 +217,23 @@ func (a *app) addArticle(url string) error {
 	return nil
 }
 
-func authFlow(consumerKey string) {
-	// We open a listener to grab a random open port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func (h *handler) handleAuthenticate(c *cli.Context) error {
+	if h.conf.AccessToken != "" && !c.Bool("overwrite") {
+		return errors.New("access token already set, use --overwrite to replace")
+	}
+
+	ck := c.String("consumer-key")
+	if ck == "" {
+		ck = h.conf.ConsumerKey
+		if ck == "" {
+			return errors.New("consumer key must be provided in config file or --consumer-key")
+		}
+	}
+
+	err := authFlow(ck)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	err = listener.Close()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	doneChan := make(chan struct{})
-
-	s := &http.Server{
-		Addr:    listener.Addr().String(),
-		Handler: handleAuth(doneChan),
-	}
-	fmt.Printf("Listening on %s\n", s.Addr)
-
-	go func() {
-		s.ListenAndServe()
-	}()
-
-	client := &http.Client{}
-
-	reqBody := struct {
-		ConsumerKey string `json:"consumer_key"`
-		RedirectURI string `json:"redirect_uri"`
-	}{
-		ConsumerKey: consumerKey,
-		RedirectURI: "http://" + s.Addr,
-	}
-
-	b, err := json.Marshal(reqBody)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	req, err := http.NewRequest("POST", "https://getpocket.com/v3/oauth/request", bytes.NewBuffer(b))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("X-Accept", "application/json")
-
-	res, err := client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	} else if res.StatusCode >= 300 {
-		log.Fatalf("got status code %d", res.StatusCode)
-	}
-
-	resBody := struct {
-		Code string `json:"code"`
-	}{}
-
-	err = json.NewDecoder(res.Body).Decode(&resBody)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("Go to https://getpocket.com/auth/authorize?request_token=%s&redirect_uri=%s to continue\n", resBody.Code, "http://"+s.Addr)
-
-	<-doneChan
-	err = s.Close()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	authorizeReqBody := struct {
-		ConsumerKey string `json:"consumer_key"`
-		Code        string `json:"code"`
-	}{
-		ConsumerKey: consumerKey,
-		Code:        resBody.Code,
-	}
-
-	b, err = json.Marshal(authorizeReqBody)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	req, err = http.NewRequest("POST", "https://getpocket.com/v3/oauth/authorize", bytes.NewBuffer(b))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("X-Accept", "application/json")
-
-	res, err = client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	} else if res.StatusCode >= 300 {
-		log.Fatalf("got status code %d", res.StatusCode)
-	}
-
-	authorizeResBody := struct {
-		AccessToken string `json:"access_token"`
-		Username    string `json:"username"`
-	}{}
-	err = json.NewDecoder(res.Body).Decode(&authorizeResBody)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	cFile, err := saveConfig(config{
-		ConsumerKey: consumerKey,
-		AccessToken: authorizeResBody.AccessToken,
-		Username:    authorizeResBody.Username,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("Access token: %s\n", authorizeResBody.AccessToken)
-	fmt.Printf("Username: %s\n", authorizeResBody.Username)
-	fmt.Printf("\nConfiguration written to %s\n", cFile)
-}
-
-func handleAuth(done chan<- struct{}) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		done <- struct{}{}
-	})
+	return nil
 }
