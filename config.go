@@ -25,7 +25,10 @@ func openConfig() (conf config, err error) {
 	}
 
 	buf, err := ioutil.ReadFile(cDir + "/rss2pocket/config.json")
-	if err != nil {
+	if _, ok := err.(*os.PathError); ok {
+		err = saveDefaultConfig()
+		return conf, err
+	} else if err != nil {
 		return conf, err
 	}
 
@@ -35,6 +38,30 @@ func openConfig() (conf config, err error) {
 	}
 
 	return conf, err
+}
+
+func saveDefaultConfig() error {
+	cDir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(cDir+"/rss2pocket", 0755)
+	if err != nil {
+		return err
+	}
+
+	buf, err := json.Marshal(config{})
+	if err != nil {
+		return err
+	}
+
+	err = ioutil.WriteFile(cDir+"/rss2pocket/config.json", buf, 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func saveConfig(c config) (string, error) {
