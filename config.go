@@ -24,7 +24,7 @@ func openConfig() (conf config, err error) {
 		return conf, err
 	}
 
-	buf, err := ioutil.ReadFile(cDir + "/rss2pocket/config.json")
+	buf, err := ioutil.ReadFile(cDir + "/feedsync/config.json")
 	if _, ok := err.(*os.PathError); ok {
 		err = saveDefaultConfig()
 		return conf, err
@@ -46,7 +46,7 @@ func saveDefaultConfig() error {
 		return err
 	}
 
-	err = os.MkdirAll(cDir+"/rss2pocket", 0755)
+	err = os.MkdirAll(cDir+"/feedsync", 0755)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func saveDefaultConfig() error {
 		return err
 	}
 
-	err = ioutil.WriteFile(cDir+"/rss2pocket/config.json", buf, 0644)
+	err = ioutil.WriteFile(cDir+"/feedsync/config.json", buf, 0644)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func saveConfig(c config) (string, error) {
 		return "", err
 	}
 
-	filename := cDir + "/rss2pocket/config.json"
+	filename := cDir + "/feedsync/config.json"
 
 	buf, err := json.Marshal(c)
 	if err != nil {

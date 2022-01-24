@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/mattmeyers/rss2pocket/pocket"
+	"github.com/mattmeyers/feedsync/pocket"
 	"github.com/mmcdole/gofeed"
 	"github.com/urfave/cli/v2"
 )
@@ -29,7 +29,7 @@ func main() {
 	}
 
 	app := &cli.App{
-		Name:  "rss2pocket",
+		Name:  "feedsync",
 		Usage: "synchronize RSS/Atom feeds to your Pocket",
 		Commands: []*cli.Command{
 			{
