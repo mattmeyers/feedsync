@@ -16,16 +16,18 @@ func NewFeedStore(db *bbolt.DB) *FeedStore {
 }
 
 func (s *FeedStore) List() ([]store.Feed, error) {
-	var feeds []store.Feed
+	feeds := []store.Feed{}
 
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketFeeds))
 		b.ForEach(func(k, v []byte) error {
-			f := store.Feed{ID: btoi(k)}
+			var f store.Feed
 			err := json.Unmarshal(v, &f)
 			if err != nil {
 				return err
 			}
+
+			f.ID = btoi(k)
 
 			feeds = append(feeds, f)
 			return nil
