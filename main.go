@@ -1,23 +1,20 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
-	"time"
 
+	"github.com/mattmeyers/rss2pocket/pocket"
 	"github.com/mmcdole/gofeed"
 	"github.com/urfave/cli/v2"
 )
 
 type handler struct {
 	conf   config
-	client *http.Client
+	client *pocket.Client
 }
 
 func main() {
@@ -28,7 +25,7 @@ func main() {
 
 	h := handler{
 		conf:   conf,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: pocket.NewClient(conf.ConsumerKey, conf.AccessToken),
 	}
 
 	app := &cli.App{
@@ -188,33 +185,7 @@ func (h *handler) handleSync(c *cli.Context) error {
 }
 
 func (h *handler) addArticle(url string) error {
-	body, err := json.Marshal(struct {
-		URL         string `json:"url"`
-		ConsumerKey string `json:"consumer_key"`
-		AccessToken string `json:"access_token"`
-	}{
-		URL:         url,
-		ConsumerKey: h.conf.ConsumerKey,
-		AccessToken: h.conf.AccessToken,
-	})
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest("POST", "https://getpocket.com/v3/add", bytes.NewBuffer(body))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("X-Accept", "application/json")
-
-	_, err = h.client.Do(req)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return h.client.AddLink(url)
 }
 
 func (h *handler) handleAuthenticate(c *cli.Context) error {
